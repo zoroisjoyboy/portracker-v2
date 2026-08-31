@@ -25,13 +25,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import plaid_client as pc
-from db import get_db_dep, init_db
-from models import PlaidItem
+import server.plaid_client as pc
+from server.db import get_db_dep, init_db
+from server.models import PlaidItem
 from sync import sync_all, sync_item
-from prices import refresh_prices, get_portfolio_value, get_indices, get_upcoming_events
+from server.prices import refresh_prices, get_portfolio_value, get_indices, get_upcoming_events
 from history import log_all_snapshots, load_history, import_from_csv
-from renderer import render_display
+from server.renderer import render_display
 
 app = FastAPI(title="Portracker v2")
 
@@ -122,7 +122,7 @@ async def plaid_webhook(payload: dict, background: BackgroundTasks,
 
 
 async def _background_sync(item_db_id: int):
-    from db import get_db
+    from server.db import get_db
     with get_db() as db:
         item = db.query(PlaidItem).get(item_db_id)
         if item:
