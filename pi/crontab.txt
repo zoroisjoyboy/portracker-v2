@@ -1,0 +1,17 @@
+# ── portracker-v2 Pi crontab ──────────────────────────────────────────────────
+# Edit with: crontab -e
+CRON_TZ=America/Chicago
+VENV=/home/asaakov/portracker/.venv/bin/python3
+DIR=/home/asaakov/portracker
+SERVER=https://your-app.up.railway.app   # ← update this
+
+# Daily mode: market hours (Mon-Fri 8:30am–3:00pm CT)
+*/5 8-14 * * 1-5 cd $DIR && SERVER_URL=$SERVER DISPLAY_MODE=daily $VENV portracker-v2/pi/display_client.py
+
+# Monthly mode: weekday evenings (4pm–8pm CT)
+0 16-19 * * 1-5 cd $DIR && SERVER_URL=$SERVER DISPLAY_MODE=monthly $VENV portracker-v2/pi/display_client.py
+
+# YTD mode: overnight + weekends
+0 20-23 * * 1-5 cd $DIR && SERVER_URL=$SERVER DISPLAY_MODE=ytd $VENV portracker-v2/pi/display_client.py
+0 0-7   * * 1-5 cd $DIR && SERVER_URL=$SERVER DISPLAY_MODE=ytd $VENV portracker-v2/pi/display_client.py
+0 *     * * 0,6 cd $DIR && SERVER_URL=$SERVER DISPLAY_MODE=ytd $VENV portracker-v2/pi/display_client.py

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portracker — Link Account</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 440px;
+      text-align: center;
+    }
+
+    .logo {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    p {
+      font-size: 14px;
+      color: #888;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      background: #e8e8e8;
+      color: #0f0f0f;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover:not(:disabled) { background: #fff; }
+    button:disabled { background: #333; color: #555; cursor: default; }
+
+    .status {
+      margin-top: 24px;
+      font-size: 13px;
+      min-height: 20px;
+      color: #888;
+    }
+
+    .status.success { color: #4caf50; }
+    .status.error   { color: #f44336; }
+
+    .accounts {
+      margin-top: 28px;
+      text-align: left;
+      display: none;
+    }
+
+    .accounts h2 {
+      font-size: 13px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #555;
+      margin-bottom: 12px;
+    }
+
+    .account-row {
+      background: #222;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .account-slug {
+      font-size: 11px;
+      color: #555;
+      font-family: monospace;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2a2a2a;
+      margin: 28px 0;
+    }
+
+    .next-steps {
+      text-align: left;
+      font-size: 13px;
+      color: #666;
+      line-height: 1.8;
+    }
+
+    .next-steps code {
+      background: #222;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      color: #aaa;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Portracker</div>
+
+    <h1>Link Your Brokerage</h1>
+    <p>Connect your Fidelity account securely via Plaid. Your credentials are never stored — only a read-only access token is kept.</p>
+
+    <button id="link-btn" onclick="startLink()">Connect with Plaid</button>
+
+    <div class="status" id="status"></div>
+
+    <div class="accounts" id="accounts-section">
+      <h2>Linked Accounts</h2>
+      <div id="accounts-list"></div>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="next-steps">
+      After linking:<br/>
+      1. Trigger initial sync: <code>GET /plaid/sync</code><br/>
+      2. Refresh prices: <code>GET /prices/refresh</code><br/>
+      3. Import history CSV: <code>POST /admin/import-csv</code>
+    </div>
+  </div>
+
+  <!-- Plaid Link JS -->
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+
+  <script>
+    // Point this at your Railway server URL (or localhost:8000 for local testing)
+    const API_BASE = window.location.origin.includes("localhost")
+      ? "http://localhost:8000"
+      : "https://your-railway-app.up.railway.app";  // ← update this before deploying
+
+    function setStatus(msg, type = "") {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = "status " + type;
+    }
+
+    function setLoading(loading) {
+      const btn = document.getElementById("link-btn");
+      btn.disabled = loading;
+      btn.textContent = loading ? "Connecting..." : "Connect with Plaid";
+    }
+
+    async function startLink() {
+      setLoading(true);
+      setStatus("Fetching link token...");
+
+      try {
+        // 1. Get link token from our server
+        const res = await fetch(`${API_BASE}/plaid/link-token`, { method: "POST" });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        const { link_token } = await res.json();
+
+        // 2. Open Plaid Link modal
+        const handler = Plaid.create({
+          token: link_token,
+          onSuccess: async (public_token, metadata) => {
+            setStatus("Exchanging token...");
+            await exchangeToken(public_token, metadata);
+          },
+          onExit: (err) => {
+            setLoading(false);
+            if (err) {
+              setStatus(`Plaid error: ${err.error_message}`, "error");
+            } else {
+              setStatus("Cancelled.", "");
+            }
+          },
+          onLoad: () => {
+            setLoading(false);
+            setStatus("");
+          },
+        });
+
+        handler.open();
+
+      } catch (err) {
+        setLoading(false);
+        setStatus(`Error: ${err.message}`, "error");
+      }
+    }
+
+    async function exchangeToken(public_token, metadata) {
+      try {
+        const res = await fetch(`${API_BASE}/plaid/exchange`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ public_token }),
+        });
+
+        if (!res.ok) throw new Error(`Exchange failed: ${res.status}`);
+        const data = await res.json();
+
+        setStatus(
+          `✓ Linked ${data.institution} (${data.status})`,
+          "success"
+        );
+
+        // Show linked accounts from Plaid metadata
+        const section = document.getElementById("accounts-section");
+        const list    = document.getElementById("accounts-list");
+        section.style.display = "block";
+        list.innerHTML = "";
+
+        (metadata.accounts || []).forEach(acct => {
+          const row = document.createElement("div");
+          row.className = "account-row";
+          row.innerHTML = `
+            <div>
+              <div>${acct.name}</div>
+              <div class="account-slug">${acct.subtype || acct.type}</div>
+            </div>
+            <div style="color:#4caf50; font-size:12px;">✓ linked</div>
+          `;
+          list.appendChild(row);
+        });
+
+      } catch (err) {
+        setStatus(`Exchange error: ${err.message}`, "error");
+      } finally {
+        setLoading(false);
+      }
+    }
+  </script>
+</body>
+</html>
