@@ -48,4 +48,4 @@ def get_db_dep():
     try:
         yield db
     finally:
-        db.close()
+        db.close()     
