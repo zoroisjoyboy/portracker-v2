@@ -21,12 +21,14 @@ from models import PlaidItem, Account, Security, Holding, Transaction
 # Map Plaid account names/subtypes → display slugs
 # Adjust these to match what Plaid returns for your Fidelity accounts
 SLUG_MAP: dict[str, str] = {
-    "individual":  "individual",   # matched against account name (case-insensitive)
+    "plaid ira":  "roth_ira",
+    "plaid 401k": "individual",
+    "ira":        "roth_ira",
+    "401k":       "individual",
+    "individual":  "individual",
     "roth":        "roth_ira",
     "roth ira":    "roth_ira",
-    "brokerage":   "individual",
 }
-
 
 def _slug_for_account(account: dict) -> str:
     """Derive a slug from account name or subtype."""
@@ -34,7 +36,7 @@ def _slug_for_account(account: dict) -> str:
     subtype = (account.get("subtype") or "").lower()
 
     for key, slug in SLUG_MAP.items():
-        if key in name or key in subtype:
+        if key in name or key == subtype:
             return slug
 
     # Fallback: sanitize the name
