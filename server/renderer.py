@@ -16,25 +16,14 @@ BLACK   = 0
 WHITE   = 255
 
 def _find_font_dir() -> str:
-    try:
-        result = subprocess.run(
-            ["find", "/usr", "-name", "DejaVuSansMono.ttf"],
-            capture_output=True, text=True, timeout=5
-        )
-        found = result.stdout.strip().split("\n")
-        for path in found:
-            if path:
-                return os.path.dirname(path) + "/"
-    except Exception:
-        pass
-    # Fallback candidates
-    for candidate in [
-        "/usr/share/fonts/truetype/dejavu/",
-        "/usr/share/fonts/dejavu/",
-        "/usr/share/fonts/truetype/ttf-dejavu/",
-    ]:
-        if os.path.exists(candidate + "DejaVuSansMono.ttf"):
-            return candidate
+    # Bundled fonts (works everywhere)
+    bundled = os.path.join(os.path.dirname(__file__), "fonts") + "/"
+    if os.path.exists(bundled + "DejaVuSansMono.ttf"):
+        return bundled
+    # Pi fallback
+    pi_path = "/usr/share/fonts/truetype/dejavu/"
+    if os.path.exists(pi_path + "DejaVuSansMono.ttf"):
+        return pi_path
     return ""
 
 def _font(name, size):
