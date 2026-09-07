@@ -253,8 +253,11 @@ def render_display(portfolios: dict, indices: list, history: dict,
             else:
                 pct = dollar = 0.0
 
-        pct_str    = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-        dollar_str = f"{'+' if dollar >= 0 else '-'}${abs(dollar):,.0f}"
+        if pct is None or dollar is None:
+            pct_str, dollar_str = "--", "--"
+        else:
+            pct_str    = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
+            dollar_str = f"{'+' if dollar >= 0 else '-'}${abs(dollar):,.0f}"
 
         _text(draw, (left_x0 + 8, py),      SLUG_LABELS.get(slug, slug), F_SMALLB)
         _text(draw, (left_x0 + 8, py + 17), pct_str,    F_MED)
