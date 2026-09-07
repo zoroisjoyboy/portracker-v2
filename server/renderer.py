@@ -6,10 +6,8 @@ but takes pre-fetched data as arguments instead of reading files.
 Called by main.py to produce the 800x480 PNG that the Pi downloads.
 """
 
-import math
-import os
+import math, os, subprocess, shutil
 from datetime import datetime, date, timedelta
-import shutil
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -18,34 +16,37 @@ BLACK   = 0
 WHITE   = 255
 
 def _find_font_dir() -> str:
-    # Try common locations across Pi, Debian, Railway
-    candidates = [
+    try:
+        result = subprocess.run(
+            ["find", "/usr", "-name", "DejaVuSansMono.ttf"],
+            capture_output=True, text=True, timeout=5
+        )
+        found = result.stdout.strip().split("\n")
+        for path in found:
+            if path:
+                return os.path.dirname(path) + "/"
+    except Exception:
+        pass
+    # Fallback candidates
+    for candidate in [
         "/usr/share/fonts/truetype/dejavu/",
         "/usr/share/fonts/dejavu/",
-        "/usr/share/fonts/truetype/dejavu-sans/",
-        "/usr/share/fonts/",
-    ]
-    for path in candidates:
-        if os.path.exists(path + "DejaVuSansMono.ttf"):
-            return path
+        "/usr/share/fonts/truetype/ttf-dejavu/",
+    ]:
+        if os.path.exists(candidate + "DejaVuSansMono.ttf"):
+            return candidate
     return ""
 
-FONT_DIR =  _find_font_dir()
-
 def _font(name, size):
+    font_dir = _find_font_dir()
     try:
-        return ImageFont.truetype(FONT_DIR + name, size)
+        return ImageFont.truetype(font_dir + name, size)
     except OSError:
-        # Pillow will search system font paths
-        return ImageFont.truetype(name, size)
-
-
-F_TINY   = _font("DejaVuSansMono.ttf",      13)
-F_SMALL  = _font("DejaVuSansMono.ttf",      15)
-F_SMALLB = _font("DejaVuSansMono-Bold.ttf", 15)
-F_MED    = _font("DejaVuSansMono-Bold.ttf", 18)
-F_LABEL  = _font("DejaVuSans-Bold.ttf",     13)
-
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            return ImageFont.load_default()
+        
 MARGIN       = 8
 TOP_BAR_H    = 56
 BOTTOM_BAR_H = 44
@@ -151,6 +152,13 @@ def render_display(portfolios: dict, indices: list, history: dict,
     events:     [{symbol, kind, date, detail}]
     mode:       daily | monthly | ytd
     """
+
+    F_TINY   = _font("DejaVuSansMono.ttf",      13)
+    F_SMALL  = _font("DejaVuSansMono.ttf",      15)
+    F_SMALLB = _font("DejaVuSansMono-Bold.ttf", 15)
+    F_MED    = _font("DejaVuSansMono-Bold.ttf", 18)
+    F_LABEL  = _font("DejaVuSans-Bold.ttf",     13)
+
     img  = Image.new("L", (W, H), WHITE)
     draw = ImageDraw.Draw(img)
 
