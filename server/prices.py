@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, date
 import yfinance as yf
 from sqlalchemy.orm import Session
 
-from server.models import LivePrice, Holding, Security, Account
+from models import LivePrice, Holding, Security, Account
 
 INDICES = {
     "SPY": "SPY",

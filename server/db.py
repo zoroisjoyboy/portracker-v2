@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
-from server.models import Base
+from models import Base
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
