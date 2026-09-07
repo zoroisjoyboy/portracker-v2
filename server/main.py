@@ -133,8 +133,23 @@ async def _background_sync(item_db_id: int):
 
 @app.get("/plaid/sync")
 def manual_sync(db: Session = Depends(get_db_dep)):
-    """Manually trigger full Plaid sync for all linked items."""
-    results = sync_all(db)
+    from sync import sync_all, sync_item
+    from models import PlaidItem
+    items = db.query(PlaidItem).all()
+    results = []
+    for item in items:
+        try:
+            summary = sync_item(db, item)
+            db.commit()
+            results.append({"item_id": item.item_id, "status": "ok", **summary})
+        except Exception as e:
+            import traceback
+            results.append({
+                "item_id": item.item_id,
+                "status": "error",
+                "error": str(e),
+                "trace": traceback.format_exc()
+            })
     return {"results": results}
 
 
