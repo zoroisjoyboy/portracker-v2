@@ -182,11 +182,13 @@ def display_image(mode: str = Query(default="daily"), db: Session = Depends(get_
 
 @app.get("/display/image/{mode}")
 def display_image_mode(mode: str, db: Session = Depends(get_db_dep)):
-    """Convenience routes: /display/image/daily, /display/image/ytd, etc."""
     if mode not in ("daily", "monthly", "ytd"):
         raise HTTPException(status_code=400, detail="mode must be daily, monthly, or ytd")
-    buf = _render_mode(mode, db)
-    return StreamingResponse(buf, media_type="image/png")
+    try:
+        buf = _render_mode(mode, db)
+        return StreamingResponse(buf, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
@@ -220,3 +222,23 @@ def debug_fonts():
         capture_output=True, text=True
     )
     return {"found": result.stdout.strip().split("\n")}
+
+@app.get("/debug/plaid-accounts")
+def debug_plaid_accounts(db: Session = Depends(get_db_dep)):
+    from models import PlaidItem
+    import plaid_client as pc
+    item = db.query(PlaidItem).first()
+    if not item:
+        return {"error": "no plaid item found"}
+    data = pc.get_holdings(item.access_token)
+    return {
+        "accounts": [
+            {
+                "account_id": a["account_id"],
+                "name": a.get("name"),
+                "type": a.get("type"),
+                "subtype": a.get("subtype"),
+            }
+            for a in data["accounts"]
+        ]
+    }
