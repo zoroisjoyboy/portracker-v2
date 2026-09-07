@@ -211,3 +211,12 @@ def import_csv(body: CsvImportRequest, db: Session = Depends(get_db_dep)):
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+@app.get("/debug/fonts")
+def debug_fonts():
+    import subprocess
+    result = subprocess.run(
+        ["find", "/usr", "-name", "DejaVuSansMono.ttf"],
+        capture_output=True, text=True
+    )
+    return {"found": result.stdout.strip().split("\n")}

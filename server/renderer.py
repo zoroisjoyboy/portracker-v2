@@ -7,7 +7,9 @@ Called by main.py to produce the 800x480 PNG that the Pi downloads.
 """
 
 import math
+import os
 from datetime import datetime, date, timedelta
+import shutil
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -15,11 +17,27 @@ W, H    = 800, 480
 BLACK   = 0
 WHITE   = 255
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
+def _find_font_dir() -> str:
+    # Try common locations across Pi, Debian, Railway
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/",
+        "/usr/share/fonts/dejavu/",
+        "/usr/share/fonts/truetype/dejavu-sans/",
+        "/usr/share/fonts/",
+    ]
+    for path in candidates:
+        if os.path.exists(path + "DejaVuSansMono.ttf"):
+            return path
+    return ""
 
+FONT_DIR =  _find_font_dir()
 
 def _font(name, size):
-    return ImageFont.truetype(FONT_DIR + name, size)
+    try:
+        return ImageFont.truetype(FONT_DIR + name, size)
+    except OSError:
+        # Pillow will search system font paths
+        return ImageFont.truetype(name, size)
 
 
 F_TINY   = _font("DejaVuSansMono.ttf",      13)
