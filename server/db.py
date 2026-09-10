@@ -29,7 +29,7 @@ def init_db():
 
 
 @contextmanager
-def get_db() -> Session:
+def get_db() -> Session: # type: ignore
     """Context manager for a database session."""
     db = SessionLocal()
     try:
