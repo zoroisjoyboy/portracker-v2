@@ -30,6 +30,8 @@ SLUG_MAP: dict[str, str] = {
     "roth ira":    "roth_ira",
 }
 
+ALLOWED_TYPES = {"investment", "credit"}
+
 def _slug_for_account(account: dict) -> str:
     """Derive a slug from account name or subtype."""
     name    = (account.get("name") or "").lower()
@@ -60,7 +62,7 @@ def sync_item(db: Session, plaid_item: PlaidItem) -> dict:
     # Upsert accounts
     account_map: dict[str, Account] = {}  # plaid_account_id → Account ORM obj
     for acct in holdings_data["accounts"]:
-        if acct.get("type") != "investment":
+        if acct.get("type") not in ALLOWED_TYPES:
             continue
         slug    = _slug_for_account(acct)
         db_acct = db.query(Account).filter_by(account_id=acct["account_id"]).first()
