@@ -302,13 +302,28 @@ def backfill_history(db: Session = Depends(get_db_dep)):
         return {"error": "No non-cash tickers found in holdings"}
  
     # Fetch historical daily closes for all tickers in one batch
-    print(f"Fetching historical prices for {len(all_tickers)} tickers "
-          f"({START_DATE} → {END_DATE})...")
- 
-    tickers_list = list(all_tickers)
+
+    print(
+        f"Fetching historical prices for {len(all_tickers)} tickers "
+        f"({START_DATE} → {END_DATE})..."
+    )
+
+    YAHOO_TICKER_MAP = {
+        "BRK.B": "BRK-B",
+    }
+
+    # Keep original tickers for database/portfolio use
+    original_tickers = list(all_tickers)
+
+    # Convert only for Yahoo Finance
+    yahoo_tickers = [
+        YAHOO_TICKER_MAP.get(ticker, ticker)
+        for ticker in original_tickers
+    ]
+
     try:
         raw = yf.download(
-            tickers=" ".join(tickers_list),
+            tickers=" ".join(yahoo_tickers),
             start=START_DATE.strftime("%Y-%m-%d"),
             end=(END_DATE + timedelta(days=1)).strftime("%Y-%m-%d"),
             auto_adjust=True,
@@ -316,22 +331,33 @@ def backfill_history(db: Session = Depends(get_db_dep)):
             group_by="ticker",
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"yfinance download failed: {e}")
- 
-    # Build price lookup: {ticker: {date: close_price}}
-    price_map: dict[str, dict[date, float]] = {t: {} for t in tickers_list}
- 
+        raise HTTPException(
+            status_code=500,
+            detail=f"yfinance download failed: {e}"
+        )
+
+    # Build price lookup: {original_ticker: {date: close_price}}
+    price_map = {ticker: {} for ticker in original_tickers}
+
     if not raw.empty:
-        close = raw["Close"] if len(tickers_list) == 1 else raw["Close"]
-        for ticker in tickers_list:
+
+        for original_ticker, yahoo_ticker in zip(
+            original_tickers,
+            yahoo_tickers
+        ):
             try:
-                series = close if len(tickers_list) == 1 else close[ticker]
+                # With group_by="ticker", each ticker is a top-level column
+                series = raw[yahoo_ticker]["Close"]
+
                 for ts, val in series.items():
-                    val = float(val)
                     if val == val:  # skip NaN
-                        price_map[ticker][ts.date()] = val
-            except Exception:
-                pass
+                        price_map[original_ticker][ts.date()] = float(val)
+
+            except Exception as e:
+                print(
+                    f"Could not process {original_ticker} "
+                    f"(Yahoo: {yahoo_ticker}): {e}"
+                )
  
     # Compute daily portfolio values and write to portfolio_history
     total_written = 0
