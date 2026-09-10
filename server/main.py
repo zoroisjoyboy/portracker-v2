@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 import plaid_client as pc
 from db import get_db_dep, init_db
-from models import PlaidItem
+from models import PlaidItem, Account
 from sync import sync_all, sync_item
 from prices import refresh_prices, get_portfolio_value, get_indices, get_upcoming_events
 from history import log_all_snapshots, load_history, import_from_csv
@@ -237,6 +237,192 @@ def debug_fonts():
         capture_output=True, text=True
     )
     return {"found": result.stdout.strip().split("\n")}
+
+
+@app.post("/admin/backfill")
+def backfill_history(db: Session = Depends(get_db_dep)):
+    """
+    Backfill portfolio_history from Jan 1 of current year to yesterday
+    using current Plaid holdings × yfinance historical daily closes.
+ 
+    Only processes investment accounts (type=investment).
+    Uses current quantities — positions bought/sold during the year
+    will not be perfectly accurate but close enough for the chart.
+ 
+    Safe to re-run — skips dates already in portfolio_history.
+    """
+    import yfinance as yf
+    from datetime import date, timedelta, datetime
+    from models import PortfolioHistory
+ 
+    START_DATE = date(date.today().year, 1, 1)
+    END_DATE   = date.today() - timedelta(days=1)
+    CASH_TYPES = {"cash", "money market"}
+ 
+    # Get all investment accounts
+    accounts = (
+        db.query(Account)
+        .filter_by(is_active=True)
+        .filter(Account.account_type == "investment")
+        .all()
+    )
+ 
+    if not accounts:
+        return {"error": "No investment accounts found — run /plaid/sync first"}
+ 
+    # Collect all unique non-cash tickers across all investment accounts
+    all_tickers: set[str] = set()
+    account_holdings: dict[str, list[dict]] = {}
+ 
+    for acct in accounts:
+        positions = []
+        for h in acct.holdings:
+            sec = h.security
+            if sec.is_cash_equivalent or not sec.ticker_symbol:
+                positions.append({
+                    "ticker":     None,
+                    "quantity":   h.quantity,
+                    "is_cash":    True,
+                    "cash_value": h.institution_value or 0.0,
+                })
+            else:
+                positions.append({
+                    "ticker":   sec.ticker_symbol,
+                    "quantity": h.quantity,
+                    "is_cash":  False,
+                })
+                all_tickers.add(sec.ticker_symbol)
+        account_holdings[acct.slug] = positions
+ 
+    if not all_tickers:
+        return {"error": "No non-cash tickers found in holdings"}
+ 
+    # Fetch historical daily closes for all tickers in one batch
+    print(f"Fetching historical prices for {len(all_tickers)} tickers "
+          f"({START_DATE} → {END_DATE})...")
+ 
+    tickers_list = list(all_tickers)
+    try:
+        raw = yf.download(
+            tickers=" ".join(tickers_list),
+            start=START_DATE.strftime("%Y-%m-%d"),
+            end=(END_DATE + timedelta(days=1)).strftime("%Y-%m-%d"),
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"yfinance download failed: {e}")
+ 
+    # Build price lookup: {ticker: {date: close_price}}
+    price_map: dict[str, dict[date, float]] = {t: {} for t in tickers_list}
+ 
+    if not raw.empty:
+        close = raw["Close"] if len(tickers_list) == 1 else raw["Close"]
+        for ticker in tickers_list:
+            try:
+                series = close if len(tickers_list) == 1 else close[ticker]
+                for ts, val in series.items():
+                    val = float(val)
+                    if val == val:  # skip NaN
+                        price_map[ticker][ts.date()] = val
+            except Exception:
+                pass
+ 
+    # Compute daily portfolio values and write to portfolio_history
+    total_written = 0
+    results       = {}
+ 
+    for slug, positions in account_holdings.items():
+        print(f"Computing history for {slug}...")
+ 
+        # Get all dates where we have prices
+        all_dates: set[date] = set()
+        for pos in positions:
+            if not pos["is_cash"] and pos["ticker"]:
+                all_dates.update(price_map.get(pos["ticker"], {}).keys())
+ 
+        sorted_dates = sorted(d for d in all_dates if START_DATE <= d <= END_DATE)
+        if not sorted_dates:
+            results[slug] = "no price data"
+            continue
+ 
+        # Get existing dates to skip
+        existing = set(
+            row[0].date()
+            for row in db.query(PortfolioHistory.snapshot_at)
+            .filter_by(slug=slug)
+            .filter(PortfolioHistory.snapshot_at >= datetime.combine(START_DATE, datetime.min.time()))
+            .all()
+        )
+ 
+        base_value = None
+        written    = 0
+ 
+        for d in sorted_dates:
+            if d in existing:
+                continue
+ 
+            # Compute total portfolio value for this date
+            total = 0.0
+            skip  = False
+            for pos in positions:
+                if pos["is_cash"]:
+                    total += pos["cash_value"]
+                    continue
+                price = price_map.get(pos["ticker"], {}).get(d)
+                if price is None:
+                    # Use most recent prior price
+                    prior_dates = [pd for pd in price_map.get(pos["ticker"], {}) if pd < d]
+                    price = price_map[pos["ticker"]][max(prior_dates)] if prior_dates else None
+                if price is None:
+                    skip = True
+                    break
+                total += price * pos["quantity"]
+ 
+            if skip:
+                continue
+ 
+            total = round(total, 2)
+            if base_value is None:
+                base_value = total
+ 
+            pct_gain = round((total - base_value) / base_value * 100, 4) if base_value else 0.0
+ 
+            db.add(PortfolioHistory(
+                snapshot_at  =datetime.combine(d, datetime.min.time()),
+                slug         =slug,
+                pct_gain     =pct_gain,
+                dollar_value =total,
+                source       ="backfill",
+            ))
+            written += 1
+ 
+            if written % 100 == 0:
+                db.flush()
+ 
+        db.commit()
+        total_written += written
+        results[slug]  = f"{written} rows written ({sorted_dates[0]} → {sorted_dates[-1]})"
+        print(f"  {slug}: {written} rows")
+ 
+    return {
+        "total_written": total_written,
+        "start_date":    START_DATE.isoformat(),
+        "end_date":      END_DATE.isoformat(),
+        "accounts":      results,
+    }
+
+
+@app.get("/prices/refresh-dividends")
+def refresh_dividends_endpoint(db: Session = Depends(get_db_dep)):
+    """Refresh dividend data — call once daily, not every 5 min."""
+    from prices import refresh_dividends
+    events = refresh_dividends(db)
+    return {"dividend_events": len(events), "events": [
+        {"symbol": e["symbol"], "date": str(e["date"]), "detail": e["detail"]}
+        for e in events
+    ]}
 
 @app.get("/debug/plaid-accounts")
 def debug_plaid_accounts(db: Session = Depends(get_db_dep)):
