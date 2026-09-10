@@ -9,6 +9,7 @@ or triggered via GET /prices/refresh on the server.
 """
 
 from datetime import datetime, timedelta, date
+import time
 
 import yfinance as yf
 from sqlalchemy.orm import Session
@@ -35,17 +36,20 @@ def _upsert_price(db: Session, ticker: str, price: float, prev_close: float,
     row.change_pct_ytd = chg_ytd
     row.fetched_at     = datetime.utcnow()
 
+def fetch_with_retry(sym: str, retries: int = 3):
+    for attempt in range(retries):
+        try:
+            return yf.Ticker(sym).fast_info
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                wait = 2 ** attempt * 2  # 2s, 4s, 8s
+                print(f"  429 on {sym}, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 def refresh_prices(db: Session) -> dict:
-    """
-    Fetch live prices for:
-      - All non-cash securities currently held
-      - SPY, DOW, NASDAQ indices
-
-    Updates live_prices table.
-    Returns summary dict.
-    """
-    # Collect all unique non-cash tickers from holdings
+    # Collect all unique non-cash tickers + indices
     held_tickers = set(INDICES.values())
     rows = (
         db.query(Security.ticker_symbol)
@@ -62,21 +66,75 @@ def refresh_prices(db: Session) -> dict:
         return {"updated": 0}
 
     tickers_list = list(held_tickers)
-    yf_tickers   = yf.Tickers(" ".join(tickers_list))
-    updated      = 0
+    updated = 0
 
+    # ── Batch download for current + previous close ───────────────────────────
+    try:
+        raw = yf.download(
+            tickers=" ".join(tickers_list),
+            period="2d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+        )
+    except Exception as e:
+        print(f"  Batch download failed: {e}")
+        raw = None
+
+    # Build price lookup from batch download
+    batch_prices: dict[str, dict] = {}
+    if raw is not None and not raw.empty:
+        for sym in tickers_list:
+            try:
+                if len(tickers_list) == 1:
+                    closes = raw["Close"]
+                else:
+                    closes = raw["Close"][sym]
+
+                closes = closes.dropna()
+                if len(closes) >= 2:
+                    price      = round(float(closes.iloc[-1]), 4)
+                    prev_close = round(float(closes.iloc[-2]), 4)
+                elif len(closes) == 1:
+                    price      = round(float(closes.iloc[-1]), 4)
+                    prev_close = price
+                else:
+                    continue
+
+                daily_pct = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
+                batch_prices[sym] = {
+                    "price":      price,
+                    "prev_close": prev_close,
+                    "daily_pct":  daily_pct,
+                }
+            except Exception as e:
+                print(f"  Batch parse failed for {sym}: {e}")
+
+    # ── Extended data for indices (30d/YTD) with retry ────────────────────────
     for sym in tickers_list:
-        try:
-            info       = yf_tickers.tickers[sym].fast_info
-            price      = round(float(info.last_price), 4)
-            prev_close = round(float(info.previous_close), 4)
-            daily_pct  = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
+        pd = batch_prices.get(sym)
+        if pd is None:
+            # Fallback to fast_info with retry for missing tickers
+            try:
+                info       = fetch_with_retry(sym)
+                price      = round(float(info.last_price), 4)
+                prev_close = round(float(info.previous_close), 4)
+                daily_pct  = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
+                pd = {"price": price, "prev_close": prev_close, "daily_pct": daily_pct}
+                batch_prices[sym] = pd
+            except Exception as e:
+                print(f"  Fallback fetch failed for {sym}: {e}")
+                continue
 
-            # Extended data for indices
-            chg_30d = chg_ytd = None
-            if sym in INDICES.values():
-                hist = yf_tickers.tickers[sym].history(period="ytd", interval="1d")
+        chg_30d = chg_ytd = None
+
+        # Only fetch extended data for indices
+        if sym in INDICES.values():
+            try:
+                hist = yf.Ticker(sym).history(period="ytd", interval="1d")
                 if not hist.empty:
+                    price     = pd["price"]
                     ytd_start = float(hist["Close"].iloc[0])
                     chg_ytd   = round((price - ytd_start) / ytd_start * 100, 2)
                     month_ago = hist.index[-1] - timedelta(days=30)
@@ -84,12 +142,12 @@ def refresh_prices(db: Session) -> dict:
                     if not hist_30d.empty:
                         start_30d = float(hist_30d["Close"].iloc[0])
                         chg_30d   = round((price - start_30d) / start_30d * 100, 2)
+            except Exception as e:
+                print(f"  Extended data failed for {sym}: {e}")
 
-            _upsert_price(db, sym, price, prev_close, daily_pct, chg_30d, chg_ytd)
-            updated += 1
-
-        except Exception as e:
-            print(f"  price fetch failed for {sym}: {e}")
+        _upsert_price(db, sym, pd["price"], pd["prev_close"],
+                      pd["daily_pct"], chg_30d, chg_ytd)
+        updated += 1
 
     return {"updated": updated, "tickers": tickers_list}
 
