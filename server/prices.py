@@ -284,14 +284,14 @@ def get_indices(display_mode: str) -> list[dict]:
     """
     Get indices defined in INDICES, depending on display_mode.
     """
-    
+
     tickers = list(INDICES.values())
 
     # Determine how much historical data we need
     if display_mode == "daily":
         period = "5d"
     elif display_mode == "monthly":
-        period = "2mo"
+        period = "1mo"
     elif display_mode == "ytd":
         period = "1y"
     else:
