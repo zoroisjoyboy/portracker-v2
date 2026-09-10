@@ -5,7 +5,7 @@ Thin wrapper around the Plaid Python SDK for all operations we need.
 Environment variables required:
     PLAID_CLIENT_ID
     PLAID_SECRET
-    PLAID_ENV   — sandbox | development | production
+    PLAID_ENV   — sandbox | production
 """
 
 import os
@@ -24,11 +24,10 @@ from plaid.model.products import Products
 
 PLAID_CLIENT_ID = os.environ["PLAID_CLIENT_ID"]
 PLAID_SECRET    = os.environ["PLAID_SECRET"]
-PLAID_ENV       = os.environ.get("PLAID_ENV", "development")
+PLAID_ENV       = os.environ.get("PLAID_ENV", "production")
 
 _ENV_MAP = {
     "sandbox":     plaid.Environment.Sandbox,
-    "development": plaid.Environment.Development,
     "production":  plaid.Environment.Production,
 }
 
