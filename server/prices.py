@@ -280,17 +280,84 @@ def get_portfolio_value(db: Session, slug: str) -> dict:
     }
 
 
-def get_indices(db: Session) -> list[dict]:
+def get_indices(display_mode: str) -> list[dict]:
+    """
+    Get indices defined in INDICES, depending on display_mode.
+    """
+    
+    tickers = list(INDICES.values())
+
+    # Determine how much historical data we need
+    if display_mode == "daily":
+        period = "5d"
+    elif display_mode == "monthly":
+        period = "2mo"
+    elif display_mode == "ytd":
+        period = "1y"
+    else:
+        period = "5d"
+
+    raw = yf.download(
+        tickers=tickers,
+        period=period,
+        auto_adjust=True,
+        progress=False,
+        group_by="ticker",
+    )
+
     result = []
-    for label, etf_ticker in INDICES.items():
-        lp = db.query(LivePrice).filter_by(ticker=etf_ticker).first()
-        result.append({
-            "symbol":         label,
-            "price":          lp.price          if lp else None,
-            "change_pct":     lp.daily_pct      if lp else None,
-            "change_pct_30d": lp.change_pct_30d if lp else None,
-            "change_pct_ytd": lp.change_pct_ytd if lp else None,
-        })
+
+    for label, ticker in INDICES.items():
+        try:
+            close = raw[ticker]["Close"].dropna()
+            if len(close) < 2:
+                change_pct = None
+                price = None
+            else:
+                price = float(close.iloc[-1])
+
+                if display_mode == "daily":
+                    # Today's close vs previous trading day's close
+                    previous = float(close.iloc[-2])
+
+                elif display_mode == "monthly":
+                    # Current price vs ~30 days ago
+                    previous = float(close.iloc[0])
+
+                elif display_mode == "ytd":
+                    # Find first available trading day of current year
+                    current_year = close.index[-1].year
+                    ytd_data = close[close.index.year == current_year]
+
+                    if len(ytd_data) > 0:
+                        previous = float(ytd_data.iloc[0])
+                    else:
+                        previous = None
+
+                else:
+                    previous = float(close.iloc[-2])
+
+                change_pct = (
+                    ((price - previous) / previous) * 100
+                    if previous
+                    else None
+                )
+
+            result.append({
+                "symbol": label,
+                "price": price,
+                "change_pct": change_pct,
+            })
+
+        except Exception as e:
+            print(f"Could not fetch index {ticker}: {e}")
+
+            result.append({
+                "symbol": label,
+                "price": None,
+                "change_pct": None,
+            })
+
     return result
 
 

@@ -178,7 +178,7 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
 def _render_mode(mode: str, db: Session) -> bytes:
     slugs      = ["individual", "roth_ira"]
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
-    indices    = get_indices(db)
+    indices    = get_indices(DISPLAY_MODE_SCHEDULE)
     history    = load_history(db, mode)
     events     = get_upcoming_events(db, slugs)
 
