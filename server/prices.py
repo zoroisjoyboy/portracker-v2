@@ -1,26 +1,106 @@
 """
 prices.py
-Fetches live prices and index data from yfinance, writes to live_prices table.
-Also fetches earnings/dividend metadata for held tickers.
+Fetches live prices, index data, and earnings/dividend events
+exclusively via Finnhub API.
 
-Replaces the old refresh_prices.py + fetch_indices.py scripts.
-Called every 5 minutes during market hours by the Pi-side cron,
-or triggered via GET /prices/refresh on the server.
+Finnhub free tier: 60 requests/minute
+
+Environment variables required:
+    FINNHUB_API_KEY
 """
 
-from datetime import datetime, timedelta, date
+import os
 import time
+from datetime import datetime, timedelta, date
 
-import yfinance as yf
+import requests
 from sqlalchemy.orm import Session
 
 from models import LivePrice, Holding, Security, Account
 
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
+FINNHUB_BASE    = "https://finnhub.io/api/v1"
+
 INDICES = {
-    "SPY": "SPY",
-    "DOW": "^DJI",
-    "NDQ": "^IXIC",
+    "SPY": "SPY",   # S&P 500
+    "DOW": "DIA",   # Dow Jones
+    "NDQ": "QQQ",   # NASDAQ
 }
+
+REQUEST_DELAY = 1 # seconds between requests 
+
+
+def _get(endpoint: str, params: dict = {}) -> dict:
+    if not FINNHUB_API_KEY:
+        raise RuntimeError("FINNHUB_API_KEY environment variable not set")
+    params["token"] = FINNHUB_API_KEY
+    url = f"{FINNHUB_BASE}/{endpoint}"
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            if r.status_code == 429:
+                wait = 2 ** attempt * 5
+                print(f"  Finnhub 429 on {endpoint}, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            time.sleep(REQUEST_DELAY)
+            return r.json()
+        except requests.exceptions.RequestException as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt * 2)
+            else:
+                print(f"  Finnhub request failed: {endpoint} — {e}")
+                return {}
+    return {}
+
+
+def fetch_quote(ticker: str) -> dict | None:
+    data = _get("quote", {"symbol": ticker})
+    if not data or data.get("c") is None or data.get("c") == 0:
+        return None
+    price      = round(float(data["c"]), 4)
+    prev_close = round(float(data["pc"]), 4)
+    daily_pct  = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
+    return {"price": price, "prev_close": prev_close, "daily_pct": daily_pct}
+
+
+def fetch_candles(ticker: str, days: int) -> list[dict]:
+    now     = int(datetime.now().timestamp())
+    from_ts = int((datetime.now() - timedelta(days=days)).timestamp())
+    data = _get("stock/candle", {
+        "symbol": ticker, "resolution": "D",
+        "from": from_ts, "to": now,
+    })
+    if not data or data.get("s") != "ok":
+        return []
+    return [
+        {"date": date.fromtimestamp(t), "close": round(float(c), 4)}
+        for t, c in zip(data.get("t", []), data.get("c", []))
+    ]
+
+
+def fetch_extended(ticker: str, price: float) -> tuple[float | None, float | None]:
+    candles = fetch_candles(ticker, days=370)
+    if not candles:
+        return None, None
+    today     = date.today()
+    ytd_start = date(today.year, 1, 1)
+    month_ago = today - timedelta(days=30)
+
+    ytd_candles = [c for c in candles if c["date"] >= ytd_start]
+    chg_ytd = None
+    if ytd_candles:
+        base = ytd_candles[0]["close"]
+        chg_ytd = round((price - base) / base * 100, 2) if base else None
+
+    candles_30d = [c for c in candles if c["date"] >= month_ago]
+    chg_30d = None
+    if candles_30d:
+        base = candles_30d[0]["close"]
+        chg_30d = round((price - base) / base * 100, 2) if base else None
+
+    return chg_30d, chg_ytd
 
 
 def _upsert_price(db: Session, ticker: str, price: float, prev_close: float,
@@ -36,21 +116,9 @@ def _upsert_price(db: Session, ticker: str, price: float, prev_close: float,
     row.change_pct_ytd = chg_ytd
     row.fetched_at     = datetime.utcnow()
 
-def fetch_with_retry(sym: str, retries: int = 3):
-    for attempt in range(retries):
-        try:
-            return yf.Ticker(sym).fast_info
-        except Exception as e:
-            if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt * 2  # 2s, 4s, 8s
-                print(f"  429 on {sym}, retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
 
 def refresh_prices(db: Session) -> dict:
-    # Collect all unique non-cash tickers + indices
-    held_tickers = set(INDICES.values())
+    held_tickers: set[str] = set()
     rows = (
         db.query(Security.ticker_symbol)
         .join(Holding, Holding.security_id == Security.id)
@@ -62,150 +130,61 @@ def refresh_prices(db: Session) -> dict:
     for (ticker,) in rows:
         held_tickers.add(ticker)
 
-    if not held_tickers:
-        return {"updated": 0}
+    index_tickers = set(INDICES.values())
+    all_tickers   = list(held_tickers | index_tickers)
+    updated       = 0
 
-    tickers_list = list(held_tickers)
-    updated = 0
+    print(f"Refreshing {len(all_tickers)} tickers via Finnhub...")
 
-    # ── Batch download for current + previous close ───────────────────────────
-    try:
-        raw = yf.download(
-            tickers=" ".join(tickers_list),
-            period="2d",
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            group_by="ticker",
-        )
-    except Exception as e:
-        print(f"  Batch download failed: {e}")
-        raw = None
-
-    # Build price lookup from batch download
-    batch_prices: dict[str, dict] = {}
-    if raw is not None and not raw.empty:
-        for sym in tickers_list:
-            try:
-                if len(tickers_list) == 1:
-                    closes = raw["Close"]
-                else:
-                    closes = raw["Close"][sym]
-
-                closes = closes.dropna()
-                if len(closes) >= 2:
-                    price      = round(float(closes.iloc[-1]), 4)
-                    prev_close = round(float(closes.iloc[-2]), 4)
-                elif len(closes) == 1:
-                    price      = round(float(closes.iloc[-1]), 4)
-                    prev_close = price
-                else:
-                    continue
-
-                daily_pct = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
-                batch_prices[sym] = {
-                    "price":      price,
-                    "prev_close": prev_close,
-                    "daily_pct":  daily_pct,
-                }
-            except Exception as e:
-                print(f"  Batch parse failed for {sym}: {e}")
-
-    # ── Extended data for indices (30d/YTD) with retry ────────────────────────
-    for sym in tickers_list:
-        pd = batch_prices.get(sym)
-        if pd is None:
-            # Fallback to fast_info with retry for missing tickers
-            try:
-                info       = fetch_with_retry(sym)
-                price      = round(float(info.last_price), 4)
-                prev_close = round(float(info.previous_close), 4)
-                daily_pct  = round((price - prev_close) / prev_close * 100, 4) if prev_close else 0.0
-                pd = {"price": price, "prev_close": prev_close, "daily_pct": daily_pct}
-                batch_prices[sym] = pd
-            except Exception as e:
-                print(f"  Fallback fetch failed for {sym}: {e}")
-                continue
-
+    for ticker in all_tickers:
+        quote = fetch_quote(ticker)
+        if not quote:
+            print(f"  No quote for {ticker} — skipping")
+            continue
         chg_30d = chg_ytd = None
-
-        # Only fetch extended data for indices
-        if sym in INDICES.values():
-            try:
-                hist = yf.Ticker(sym).history(period="ytd", interval="1d")
-                if not hist.empty:
-                    price     = pd["price"]
-                    ytd_start = float(hist["Close"].iloc[0])
-                    chg_ytd   = round((price - ytd_start) / ytd_start * 100, 2)
-                    month_ago = hist.index[-1] - timedelta(days=30)
-                    hist_30d  = hist[hist.index >= month_ago]
-                    if not hist_30d.empty:
-                        start_30d = float(hist_30d["Close"].iloc[0])
-                        chg_30d   = round((price - start_30d) / start_30d * 100, 2)
-            except Exception as e:
-                print(f"  Extended data failed for {sym}: {e}")
-
-        _upsert_price(db, sym, pd["price"], pd["prev_close"],
-                      pd["daily_pct"], chg_30d, chg_ytd)
+        if ticker in index_tickers:
+            chg_30d, chg_ytd = fetch_extended(ticker, quote["price"])
+        _upsert_price(db, ticker, quote["price"], quote["prev_close"],
+                      quote["daily_pct"], chg_30d, chg_ytd)
         updated += 1
 
-    return {"updated": updated, "tickers": tickers_list}
+    print(f"Finnhub refresh complete — {updated}/{len(all_tickers)} tickers updated")
+    return {"updated": updated, "tickers": all_tickers}
 
 
 def get_portfolio_value(db: Session, slug: str) -> dict:
-    """
-    Compute current total value, daily gain, and daily % for a portfolio slug
-    using live_prices table × holdings quantities.
-
-    Returns:
-        {total_value, daily_gain, daily_pct, positions: [...]}
-    """
     account = db.query(Account).filter_by(slug=slug, is_active=True).first()
     if not account:
         return {"total_value": None, "daily_gain": None, "daily_pct": None, "positions": []}
 
-    total_value      = 0.0
-    total_prev_value = 0.0
-    positions        = []
+    total_value = total_prev_value = 0.0
+    positions = []
 
     for holding in account.holdings:
         sec    = holding.security
         ticker = sec.ticker_symbol
-
         if sec.is_cash_equivalent or not ticker:
-            # Cash — use institution_value as fixed
             cv = holding.institution_value or 0.0
             total_value      += cv
             total_prev_value += cv
             positions.append({
-                "symbol":    ticker or "CASH",
-                "quantity":  holding.quantity,
-                "price":     None,
-                "value":     cv,
-                "daily_pct": 0.0,
-                "daily_gain": 0.0,
-                "is_cash":   True,
+                "symbol": ticker or "CASH", "quantity": holding.quantity,
+                "price": None, "value": cv,
+                "daily_pct": 0.0, "daily_gain": 0.0, "is_cash": True,
             })
             continue
-
         lp = db.query(LivePrice).filter_by(ticker=ticker).first()
         if not lp or lp.price is None:
             continue
-
         value      = round(lp.price * holding.quantity, 2)
         prev_value = round(lp.prev_close * holding.quantity, 2) if lp.prev_close else value
         daily_gain = round(value - prev_value, 2)
-
         total_value      += value
         total_prev_value += prev_value
         positions.append({
-            "symbol":    ticker,
-            "quantity":  holding.quantity,
-            "price":     lp.price,
-            "value":     value,
-            "daily_pct": lp.daily_pct,
-            "daily_gain": daily_gain,
-            "is_cash":   False,
+            "symbol": ticker, "quantity": holding.quantity, "price": lp.price,
+            "value": value, "daily_pct": lp.daily_pct, "daily_gain": daily_gain,
+            "is_cash": False,
         })
 
     total_value      = round(total_value, 2)
@@ -213,20 +192,16 @@ def get_portfolio_value(db: Session, slug: str) -> dict:
     daily_pct        = round(
         (total_daily_gain / total_prev_value * 100) if total_prev_value else 0.0, 4
     )
-
     return {
-        "total_value": total_value,
-        "daily_gain":  total_daily_gain,
-        "daily_pct":   daily_pct,
-        "positions":   positions,
+        "total_value": total_value, "daily_gain": total_daily_gain,
+        "daily_pct": daily_pct, "positions": positions,
     }
 
 
 def get_indices(db: Session) -> list[dict]:
-    """Return current index data from live_prices table."""
     result = []
-    for label, sym in INDICES.items():
-        lp = db.query(LivePrice).filter_by(ticker=sym).first()
+    for label, etf_ticker in INDICES.items():
+        lp = db.query(LivePrice).filter_by(ticker=etf_ticker).first()
         result.append({
             "symbol":         label,
             "price":          lp.price          if lp else None,
@@ -238,11 +213,7 @@ def get_indices(db: Session) -> list[dict]:
 
 
 def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
-    """
-    Return upcoming earnings/dividend events for held tickers.
-    Fetches from yfinance — results are not cached in DB (lightweight enough).
-    """
-    tickers = set()
+    tickers: set[str] = set()
     for slug in slugs:
         acct = db.query(Account).filter_by(slug=slug, is_active=True).first()
         if not acct:
@@ -253,37 +224,42 @@ def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
 
     events  = []
     today   = date.today()
+    to_date = today + timedelta(days=90)
 
     for sym in tickers:
         try:
-            info = yf.Ticker(sym).info
-
-            # Earnings
-            earn_ts = info.get("earningsTimestampEnd")
-            if earn_ts:
-                earn_date = date.fromtimestamp(earn_ts)
+            data = _get("calendar/earnings", {
+                "symbol": sym,
+                "from":   today.strftime("%Y-%m-%d"),
+                "to":     to_date.strftime("%Y-%m-%d"),
+            })
+            for e in data.get("earningsCalendar", []):
+                earn_date = datetime.strptime(e["date"], "%Y-%m-%d").date()
                 if earn_date >= today:
                     events.append({
-                        "symbol": sym,
-                        "kind":   "ERN",
-                        "date":   earn_date,
+                        "symbol": sym, "kind": "ERN",
+                        "date": earn_date,
                         "detail": earn_date.strftime("%-m/%-d"),
                     })
+        except Exception:
+            pass
 
-            # Dividends
-            div_date_ts = info.get("dividendDate")
-            div_rate    = info.get("dividendRate")
-            if div_date_ts and div_rate:
-                div_date = date.fromtimestamp(div_date_ts)
+        try:
+            data = _get("stock/dividend2", {"symbol": sym})
+            for d in data.get("data", []):
+                ex_date = d.get("exDate")
+                amount  = d.get("amount")
+                if not ex_date or not amount:
+                    continue
+                div_date = datetime.strptime(ex_date, "%Y-%m-%d").date()
                 if div_date >= today:
                     events.append({
-                        "symbol": sym,
-                        "kind":   "DIV",
-                        "date":   div_date,
-                        "detail": f"${div_rate:.2f}",
+                        "symbol": sym, "kind": "DIV",
+                        "date": div_date,
+                        "detail": f"${float(amount):.2f}",
                     })
         except Exception:
-            continue
+            pass
 
     events.sort(key=lambda e: e["date"])
     return events[:8]
