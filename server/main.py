@@ -43,7 +43,11 @@ app.add_middleware(
 )
 
 DISPLAY_MODE_SCHEDULE = os.environ.get("DISPLAY_MODE", "daily")  # overridden per route
-PORTFOLIOS = os.environ.get("PORTFOLIOS", "").split(",")
+PORTFOLIOS = [
+    slug.strip()
+    for slug in os.getenv("PORTFOLIOS", "").split(",")
+    if slug.strip()
+]
 
 @app.on_event("startup")
 def startup():

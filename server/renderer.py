@@ -42,8 +42,18 @@ TOP_BAR_H    = 56
 BOTTOM_BAR_H = 44
 SIDE_W       = 130
 
-TRACKED_SLUGS = ["individual", "roth_ira", "liquid_fund"]
-SLUG_LABELS   = {"individual": "Individual", "roth_ira": "Roth IRA", "liquid_fund": "Liquid Fund"}
+TRACKED_SLUGS = [
+    slug.strip()
+    for slug in os.getenv("PORTFOLIOS", "").split(",")
+    if slug.strip()
+]
+
+SLUG_LABELS = {
+    slug: slug.replace("_", " ").title()
+    for slug in TRACKED_SLUGS
+}
+
+
 LINE_STYLES   = ["solid", "dashed", "dash-dot"]
 
 
