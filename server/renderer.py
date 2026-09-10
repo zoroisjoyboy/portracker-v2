@@ -177,20 +177,23 @@ def render_display(portfolios: dict, indices: list, history: dict,
     # idx_mode_label = {"daily": "DLY", "monthly": "30D", "ytd": "YTD"}.get(mode, "DLY")
     # _text(draw, (idx_x0 + 4, top_y0 + 4), idx_mode_label, F_TINY)
     col_w = (idx_x1 - idx_x0) // len(indices)
+
     for i, idx in enumerate(indices):
-        sym   = idx["symbol"]
+        sym = idx["symbol"]
         price = idx.get("price")
-        chg   = (idx.get("change_pct") if mode == "daily"
-                 else idx.get("change_pct_30d") if mode == "monthly"
-                 else idx.get("change_pct_ytd"))
+        chg = idx.get("change_pct")
+
         col_x = idx_x0 + i * col_w + col_w // 2
         _text(draw, (col_x, top_y0 + 10), sym, F_SMALLB, anchor="mt")
-        if price is not None and chg is not None:
-            sign = "+" if chg >= 0 else ""
+        if price is not None:
             _text(draw, (col_x, top_y0 + 25), f"{price:,.2f}", F_TINY, anchor="mt")
+        else:
+            _text(draw, (col_x, top_y0 + 25), "--", F_TINY, anchor="mt")
+
+        if chg is not None:
+            sign = "+" if chg >= 0 else ""
             _text(draw, (col_x, top_y0 + 40), f"{sign}{chg:.2f}%", F_TINY, anchor="mt")
         else:
-            _text(draw, (col_x, top_y0 + 25), f"{price:,.2f}" if price else "--", F_TINY, anchor="mt")
             _text(draw, (col_x, top_y0 + 40), "--", F_TINY, anchor="mt")
 
     # Timestamp + market status
