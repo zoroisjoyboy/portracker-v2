@@ -8,3 +8,4 @@ pillow==12.3.0
 python-dotenv==1.0.1
 pydantic==2.13.5
 httpx==0.27.0
+holidays==0.104
