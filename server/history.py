@@ -7,11 +7,15 @@ Replaces history_logger.py and the CSV-reading parts of render_display.py.
 from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-
+import os
 from models import PortfolioHistory, Account
 
 
-TRACKED_SLUGS = ["individual", "roth_ira"]
+PORTFOLIOS = [
+    slug.strip()
+    for slug in os.getenv("PORTFOLIOS", "").split(",")
+    if slug.strip()
+]
 
 
 def log_snapshot(db: Session, slug: str, pct_gain: float, dollar_value: float,
@@ -44,7 +48,7 @@ def log_all_snapshots(db: Session, portfolio_values: dict[str, dict]):
     """
     ts = datetime.utcnow()
     for slug, pf in portfolio_values.items():
-        if slug not in TRACKED_SLUGS:
+        if slug not in PORTFOLIOS:
             continue
         if pf.get("daily_pct") is None or pf.get("total_value") is None:
             continue
@@ -70,7 +74,7 @@ def load_history(db: Session, mode: str) -> dict[str, list[tuple[datetime, float
     rows = (
         db.query(PortfolioHistory)
         .filter(PortfolioHistory.snapshot_at >= cutoff)
-        .filter(PortfolioHistory.slug.in_(TRACKED_SLUGS))
+        .filter(PortfolioHistory.slug.in_(PORTFOLIOS))
         .order_by(PortfolioHistory.snapshot_at)
         .all()
     )
