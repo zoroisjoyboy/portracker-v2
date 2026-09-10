@@ -208,3 +208,6 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+
+#vscode 
+.vscode
