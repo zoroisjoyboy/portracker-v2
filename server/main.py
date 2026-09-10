@@ -43,7 +43,7 @@ app.add_middleware(
 )
 
 DISPLAY_MODE_SCHEDULE = os.environ.get("DISPLAY_MODE", "daily")  # overridden per route
-
+PORTFOLIOS = os.environ.get("PORTFOLIOS", "").split(",")
 
 @app.on_event("startup")
 def startup():
@@ -159,7 +159,7 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
     result = refresh_prices(db)
 
     # Log portfolio snapshots to history
-    slugs = ["individual", "roth_ira"]
+    slugs = PORTFOLIOS
     pf_values = {slug: get_portfolio_value(db, slug) for slug in slugs}
     log_all_snapshots(db, pf_values)
 
