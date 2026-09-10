@@ -8,6 +8,7 @@ Called by main.py to produce the 800x480 PNG that the Pi downloads.
 
 import math, os, subprocess, shutil
 from datetime import datetime, date, timedelta
+import holidays
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -41,8 +42,8 @@ TOP_BAR_H    = 56
 BOTTOM_BAR_H = 44
 SIDE_W       = 130
 
-TRACKED_SLUGS = ["individual", "roth_ira"]
-SLUG_LABELS   = {"individual": "Individual", "roth_ira": "Roth IRA"}
+TRACKED_SLUGS = ["individual", "roth_ira", "liquid_fund"]
+SLUG_LABELS   = {"individual": "Individual", "roth_ira": "Roth IRA", "liquid_fund": "Liquid Fund"}
 LINE_STYLES   = ["solid", "dashed", "dash-dot"]
 
 
@@ -124,8 +125,9 @@ def _draw_line(draw, points, style, width=2):
 
 
 def is_market_open() -> bool:
+    nyse_holidays = holidays.NYSE()
     now = datetime.now()
-    if now.weekday() >= 5:
+    if (now.weekday() >= 5) or now in nyse_holidays: 
         return False
     market_open  = now.replace(hour=8, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=15, minute=0,  second=0, microsecond=0)
@@ -162,8 +164,8 @@ def render_display(portfolios: dict, indices: list, history: dict,
     _rect(draw, (ts_x0,  top_y0, ts_x1,  top_y1), width=2)
 
     # Indices
-    idx_mode_label = {"daily": "DLY", "monthly": "30D", "ytd": "YTD"}.get(mode, "DLY")
-    _text(draw, (idx_x0 + 4, top_y0 + 4), idx_mode_label, F_TINY)
+    # idx_mode_label = {"daily": "DLY", "monthly": "30D", "ytd": "YTD"}.get(mode, "DLY")
+    # _text(draw, (idx_x0 + 4, top_y0 + 4), idx_mode_label, F_TINY)
     col_w = (idx_x1 - idx_x0) // len(indices)
     for i, idx in enumerate(indices):
         sym   = idx["symbol"]
@@ -173,17 +175,17 @@ def render_display(portfolios: dict, indices: list, history: dict,
                  else idx.get("change_pct_ytd"))
         col_x = idx_x0 + i * col_w + col_w // 2
         _text(draw, (col_x, top_y0 + 10), sym, F_SMALLB, anchor="mt")
-        if price is not None:
-            _text(draw, (col_x, top_y0 + 25), f"{price:,.2f}", F_TINY, anchor="mt")
-        if chg is not None:
+        if price is not None and chg is not None:
             sign = "+" if chg >= 0 else ""
+            _text(draw, (col_x, top_y0 + 25), f"{price:,.2f}", F_TINY, anchor="mt")
             _text(draw, (col_x, top_y0 + 40), f"{sign}{chg:.2f}%", F_TINY, anchor="mt")
         else:
+            _text(draw, (col_x, top_y0 + 25), f"{price:,.2f}" if price else "--", F_TINY, anchor="mt")
             _text(draw, (col_x, top_y0 + 40), "--", F_TINY, anchor="mt")
 
     # Timestamp + market status
     now_str = datetime.now().strftime("%b %-d  %-I:%M %p")
-    _text(draw, (ts_x0 + 10, top_y0 + 4),  "UPDATED", F_LABEL)
+    # _text(draw, (ts_x0 + 10, top_y0 + 4),  "UPDATED", F_LABEL)
     _text(draw, (ts_x0 + 10, top_y0 + 21), now_str,   F_SMALLB)
 
     market_live = is_market_open()
@@ -239,6 +241,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
 
     for i, (slug, style) in enumerate(zip(slugs, LINE_STYLES)):
         pf_data = portfolios.get(slug, {})
+        label   = SLUG_LABELS.get(slug, slug)
         pts     = history.get(slug, [])
 
         if mode == "daily":
@@ -259,12 +262,14 @@ def render_display(portfolios: dict, indices: list, history: dict,
             pct_str    = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
             dollar_str = f"{'+' if dollar >= 0 else '-'}${abs(dollar):,.0f}"
 
-        _text(draw, (left_x0 + 8, py),      SLUG_LABELS.get(slug, slug), F_SMALLB)
+        _text(draw, (left_x0 + 8, py), label, F_SMALLB)
         _text(draw, (left_x0 + 8, py + 17), pct_str,    F_MED)
         _text(draw, (left_x0 + 8, py + 37), dollar_str, F_TINY)
 
-        swatch_y = py + 52
-        _draw_line(draw, [(left_x0 + 8, swatch_y), (left_x1 - 8, swatch_y)], style, width=2)
+        swatch_y = py + 56
+        swatch   = [(left_x0 + 10, swatch_y), (left_x0 + 48, swatch_y)]
+        # _draw_line(draw, [(left_x0 + 8, swatch_y), (left_x1 - 8, swatch_y)], style, width=2)
+        _draw_line(draw, swatch, style, width=1)
 
         if i < len(slugs) - 1:
             sep_y = py + row_h - 8
@@ -302,7 +307,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
         "monthly": "GROWTH \u2014 30D ($100 peg)",
         "ytd":     "GROWTH \u2014 YTD ($100 peg)",
     }.get(mode, "PERFORMANCE")
-    _text(draw, (chart_x0 + 8, mid_y0 + 4), chart_title, F_LABEL)
+    _text(draw, (chart_x0 + 8, mid_y0 + -2), chart_title, F_LABEL)
 
     today = date.today()
     if mode == "daily":
@@ -326,10 +331,10 @@ def render_display(portfolios: dict, indices: list, history: dict,
         if not pts:
             continue
         if mode == "daily":
-            base = pts[0][1]
+            base = pts[0][1] # pct_gain at day open
             normalized = [(ts, pct - base) for ts, pct, _ in pts]
         else:
-            base_dv = pts[0][2]
+            base_dv = pts[0][2] # dollar_value at window start
             if not base_dv:
                 continue
             normalized = [(ts, (dv / base_dv) * 100) for ts, _, dv in pts]
@@ -348,6 +353,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
         all_times = [t for _, s in series_data for t, _ in s]
         t_min  = min(all_times)
         if mode == "daily":
+            # Force x-axis to span full trading day (8:30am–3:00pm CT)
             now = datetime.now()
             t_min  = now.replace(hour=8, minute=30, second=0, microsecond=0)
             t_max  = now.replace(hour=15, minute=0,  second=0, microsecond=0)
