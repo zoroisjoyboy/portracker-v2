@@ -299,7 +299,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
     earn_events = events[:SLOTS]  # server decides page; Pi state not needed here
     ey          = mid_y0 + 26
     total_pages   = max(1, math.ceil(len(earn_events) / SLOTS))
-    earn_page     = events % total_pages
+    earn_page     = len(events) % total_pages
     page_events   = events[earn_page * SLOTS:(earn_page + 1) * SLOTS]
 
     if page_events: 
