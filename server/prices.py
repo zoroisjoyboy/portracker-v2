@@ -375,8 +375,11 @@ def get_indices(display_mode: str) -> list[dict]:
     return result
 
 
-def get_upcoming_events(db: Session, slugs: list[str]) -> dict[str, list]:
-    """Returns {"earn": [...], "div": [...], "exdiv": [...]}"""
+def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
+    """
+    Returns upcoming earnings (Finnhub) + dividends (yfinance, cached daily).
+    For dividends, reads from a simple in-memory cache keyed by date.
+    """
     tickers: set[str] = set()
     for slug in slugs:
         acct = db.query(Account).filter_by(slug=slug, is_active=True).first()
@@ -386,25 +389,12 @@ def get_upcoming_events(db: Session, slugs: list[str]) -> dict[str, list]:
             if h.security.ticker_symbol and not h.security.is_cash_equivalent:
                 tickers.add(h.security.ticker_symbol)
 
-    import calendar
-    today     = date.today()
-    last_day  = calendar.monthrange(today.year, today.month)[1]
-    month_end = date(today.year, today.month, last_day)
-
-    earn_events = []
+    events = []
     for sym in tickers:
-        for e in fetch_earnings(sym):
-            if today <= e["date"] <= month_end:
-                earn_events.append(e)
+        events.extend(fetch_earnings(sym))
 
-    div_events = fetch_dividends_yf(list(tickers))
+    # Dividends from yfinance (lightweight — one call per ticker, cached by caller)
+    events.extend(fetch_dividends_yf(list(tickers)))
 
-    earn_events.sort(key=lambda e: e["date"])
-    div_pay    = sorted([e for e in div_events if e["kind"] == "DIV"],    key=lambda e: e["date"])
-    ex_div     = sorted([e for e in div_events if e["kind"] == "EX-DIV"], key=lambda e: e["date"])
-
-    return {
-        "earn":  earn_events[:8],
-        "div":   div_pay[:8],
-        "exdiv": ex_div[:8],
-    }
+    events.sort(key=lambda e: e["date"])
+    return events[:8]

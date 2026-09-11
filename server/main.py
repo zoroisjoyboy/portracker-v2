@@ -162,15 +162,14 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
     """Manually trigger yfinance price refresh."""
     result = refresh_prices(db)
 
-    # Log portfolio snapshots to history
-    slugs = PORTFOLIOS
+    slugs     = PORTFOLIOS
     pf_values = {slug: get_portfolio_value(db, slug) for slug in slugs}
     log_all_snapshots(db, pf_values)
 
     return {"prices": result, "portfolios": {
         slug: {"total_value": pf["total_value"], "daily_pct": pf["daily_pct"]}
         for slug, pf in pf_values.items()
-    }}
+    }, "slugs_used": slugs}
 
 
 # ── Display image ─────────────────────────────────────────────────────────────
@@ -178,7 +177,7 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
 def _render_mode(mode: str, db: Session) -> bytes:
     slugs      = PORTFOLIOS
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
-    indices    = get_indices(db)
+    indices    = get_indices(mode)
     history    = load_history(db, mode)
     events     = get_upcoming_events(db, slugs)  # now a dict
 
