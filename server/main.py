@@ -176,7 +176,7 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
 # ── Display image ─────────────────────────────────────────────────────────────
 
 def _render_mode(mode: str, db: Session) -> bytes:
-    slugs      = ["individual", "roth_ira"]
+    slugs      = PORTFOLIOS
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
     indices    = get_indices(mode)
     history    = load_history(db, mode)
