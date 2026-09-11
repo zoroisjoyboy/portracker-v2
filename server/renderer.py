@@ -16,6 +16,9 @@ W, H    = 800, 480
 BLACK   = 0
 WHITE   = 255
 
+_earn_page_counter = 0
+_exdiv_page_counter = 0
+
 def _find_font_dir() -> str:
     # Bundled fonts (works everywhere)
     bundled = os.path.join(os.path.dirname(__file__), "fonts") + "/"
@@ -153,7 +156,8 @@ def render_display(portfolios: dict, indices: list, history: dict,
     events:     [{symbol, kind, date, detail}]
     mode:       daily | monthly | ytd
     """
-
+    
+    global _earn_page_counter, _exdiv_page_counter
     F_TINY   = _font("DejaVuSansMono.ttf",      13)
     F_SMALL  = _font("DejaVuSansMono.ttf",      15)
     F_SMALLB = _font("DejaVuSansMono-Bold.ttf", 15)
@@ -226,12 +230,26 @@ def render_display(portfolios: dict, indices: list, history: dict,
     _rect(draw, (MARGIN, bot_y0, W - MARGIN, bot_y1), width=2)
     _text(draw, (MARGIN + 10, bot_y0 + 6), "EX-DIV", F_LABEL)
 
-    div_events = [e for e in events if e["kind"] == "DIV"]
-    
-    div_parts  = [f"{e['symbol']} {e['detail']} ex {e['date'].strftime('%-m/%-d')}"
-                  for e in div_events]
-    div_line   = "  \u2022  ".join(div_parts) if div_parts else "No upcoming dividends"
+    exdiv_events  = events.get("exdiv", [])
+    EXDIV_SLOTS   = 3
+    ex_total_pages = max(1, math.ceil(len(exdiv_events) / EXDIV_SLOTS))
+    ex_page        = _exdiv_page_counter % ex_total_pages
+    ex_page_events = exdiv_events[ex_page * EXDIV_SLOTS:(ex_page + 1) * EXDIV_SLOTS]
+
+    if ex_page_events:
+        parts    = [f"{e['symbol']} {e['detail']} {e['date'].strftime('%-m/%-d')}"
+                    for e in ex_page_events]
+        div_line = "  \u2022  ".join(parts)
+    else:
+        div_line = "No ex-dividends this month"
+
     _text(draw, (MARGIN + 10, bot_y0 + 23), div_line, F_SMALL)
+
+    if ex_total_pages > 1:
+        _text(draw, (W - MARGIN - 10, bot_y1 - 8),
+              f"{ex_page + 1} of {ex_total_pages}", F_TINY, anchor="rb")
+
+    _exdiv_page_counter += 1
 
     # ── Middle row ────────────────────────────────────────────────────────────
     mid_y0 = top_y1 + 8
@@ -291,34 +309,39 @@ def render_display(portfolios: dict, indices: list, history: dict,
         py += row_h
 
     # ── Right sidebar: earnings/dividends ─────────────────────────────────────
+    
+
     _rect(draw, (right_x0, mid_y0, right_x1, mid_y1), width=2)
     _text(draw, (right_x0 + 8, mid_y0 + 6), "EARN/DIV", F_LABEL)
 
+    # Combine earnings + dividend payment events
+    sidebar_events = events.get("earn", []) + events.get("div", [])
+    sidebar_events.sort(key=lambda e: e["date"])
+
     SLOTS       = 4
     EV_H        = (mid_y1 - mid_y0 - 28 - 16) // SLOTS
-    earn_events = events[:SLOTS]  # server decides page; Pi state not needed here
-    ey          = mid_y0 + 26
-    total_pages   = max(1, math.ceil(len(earn_events) / SLOTS))
-    earn_page     = len(events) % total_pages
-    page_events   = events[earn_page * SLOTS:(earn_page + 1) * SLOTS]
+    total_pages = max(1, math.ceil(len(sidebar_events) / SLOTS))
+    earn_page   = _earn_page_counter % total_pages
+    page_events = sidebar_events[earn_page * SLOTS:(earn_page + 1) * SLOTS]
 
-    if page_events: 
-        for j, ev in enumerate(earn_events):
+    if page_events:
+        ey = mid_y0 + 26
+        for j, ev in enumerate(page_events):
             _text(draw, (right_x0 + 8, ey),      ev["symbol"], F_SMALLB)
             _text(draw, (right_x0 + 8, ey + 16), ev["kind"],   F_TINY)
             _text(draw, (right_x0 + 8, ey + 30), ev["detail"], F_TINY)
-            _text(draw, (right_x0 + 8, ey + 44), ev["date"].strftime("%-m/%-d"), F_TINY)
-            if j < len(earn_events) - 1:
-                draw.line((right_x0 + 8, ey + EV_H - 4, right_x1 - 8, ey + EV_H - 4),
-                        fill=BLACK, width=1)
+            if j < len(page_events) - 1:
+                draw.line((right_x0 + 8, ey + EV_H - 4,
+                           right_x1 - 8, ey + EV_H - 4), fill=BLACK, width=1)
             ey += EV_H
     else:
         _text(draw, (right_x0 + 8, mid_y0 + 30), "None", F_TINY)
 
-    # Page indicator bottom-right (only if more than 1 page)
     if total_pages > 1:
-        pg_str = f"{earn_page + 1} of {total_pages}"
-        _text(draw, (right_x1 - 8, mid_y1 - 8), pg_str, F_TINY, anchor="rb")
+        _text(draw, (right_x1 - 8, mid_y1 - 8),
+              f"{earn_page + 1} of {total_pages}", F_TINY, anchor="rb")
+
+    _earn_page_counter += 1
 
     # ── Center chart ──────────────────────────────────────────────────────────
     chart_pad_l, chart_pad_r = 44, 10
