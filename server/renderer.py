@@ -307,7 +307,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
             _text(draw, (right_x0 + 8, ey),      ev["symbol"], F_SMALLB)
             _text(draw, (right_x0 + 8, ey + 16), ev["kind"],   F_TINY)
             _text(draw, (right_x0 + 8, ey + 30), ev["detail"], F_TINY)
-            _text(draw, (right_x0 + 8, ey + 30), ev["date"], F_TINY)
+            _text(draw, (right_x0 + 8, ey + 44), ev["date"].strftime("%-m/%-d"), F_TINY)
             if j < len(earn_events) - 1:
                 draw.line((right_x0 + 8, ey + EV_H - 4, right_x1 - 8, ey + EV_H - 4),
                         fill=BLACK, width=1)
