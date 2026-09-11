@@ -9,6 +9,7 @@ Called by main.py to produce the 800x480 PNG that the Pi downloads.
 import math, os, subprocess, shutil
 from datetime import datetime, date, timedelta
 import holidays
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -156,7 +157,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
     events:     [{symbol, kind, date, detail}]
     mode:       daily | monthly | ytd
     """
-    
+
     global _earn_page_counter, _exdiv_page_counter
     F_TINY   = _font("DejaVuSansMono.ttf",      13)
     F_SMALL  = _font("DejaVuSansMono.ttf",      15)
@@ -201,7 +202,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
             _text(draw, (col_x, top_y0 + 40), "--", F_TINY, anchor="mt")
 
     # Timestamp + market status
-    now_str = datetime.now().strftime("%b %-d  %-I:%M %p")
+    now_str = datetime.now(ZoneInfo("America/Chicago")).strftime("%b %-d  %-I:%M %p")
     # _text(draw, (ts_x0 + 10, top_y0 + 4),  "UPDATED", F_LABEL)
     _text(draw, (ts_x0 + 10, top_y0 + 21), now_str,   F_SMALLB)
 
