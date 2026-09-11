@@ -220,13 +220,14 @@ def render_display(portfolios: dict, indices: list, history: dict,
     _rect(draw, (bx0, by0, bx1, by1), width=1)
     _text(draw, ((bx0 + bx1) // 2, (by0 + by1) // 2), badge_label, F_TINY, anchor="mm")
 
-    # ── Bottom bar (dividends) ─────────────────────────────────────────────────
+    # ── Bottom bar (ex-dividends) ─────────────────────────────────────────────────
     bot_y1 = H - MARGIN
     bot_y0 = bot_y1 - BOTTOM_BAR_H
     _rect(draw, (MARGIN, bot_y0, W - MARGIN, bot_y1), width=2)
-    _text(draw, (MARGIN + 10, bot_y0 + 6), "DIV", F_LABEL)
+    _text(draw, (MARGIN + 10, bot_y0 + 6), "EX-DIV", F_LABEL)
 
     div_events = [e for e in events if e["kind"] == "DIV"]
+    
     div_parts  = [f"{e['symbol']} {e['detail']} ex {e['date'].strftime('%-m/%-d')}"
                   for e in div_events]
     div_line   = "  \u2022  ".join(div_parts) if div_parts else "No upcoming dividends"
@@ -293,19 +294,31 @@ def render_display(portfolios: dict, indices: list, history: dict,
     _rect(draw, (right_x0, mid_y0, right_x1, mid_y1), width=2)
     _text(draw, (right_x0 + 8, mid_y0 + 6), "EARN/DIV", F_LABEL)
 
-    SLOTS       = 3
+    SLOTS       = 4
     EV_H        = (mid_y1 - mid_y0 - 28 - 16) // SLOTS
     earn_events = events[:SLOTS]  # server decides page; Pi state not needed here
     ey          = mid_y0 + 26
+    total_pages   = max(1, math.ceil(len(earn_events) / SLOTS))
+    earn_page     = events % total_pages
+    page_events   = events[earn_page * SLOTS:(earn_page + 1) * SLOTS]
 
-    for j, ev in enumerate(earn_events):
-        _text(draw, (right_x0 + 8, ey),      ev["symbol"], F_SMALLB)
-        _text(draw, (right_x0 + 8, ey + 16), ev["kind"],   F_TINY)
-        _text(draw, (right_x0 + 8, ey + 30), ev["detail"], F_TINY)
-        if j < len(earn_events) - 1:
-            draw.line((right_x0 + 8, ey + EV_H - 4, right_x1 - 8, ey + EV_H - 4),
-                      fill=BLACK, width=1)
-        ey += EV_H
+    if page_events: 
+        for j, ev in enumerate(earn_events):
+            _text(draw, (right_x0 + 8, ey),      ev["symbol"], F_SMALLB)
+            _text(draw, (right_x0 + 8, ey + 16), ev["kind"],   F_TINY)
+            _text(draw, (right_x0 + 8, ey + 30), ev["detail"], F_TINY)
+            _text(draw, (right_x0 + 8, ey + 30), ev["date"], F_TINY)
+            if j < len(earn_events) - 1:
+                draw.line((right_x0 + 8, ey + EV_H - 4, right_x1 - 8, ey + EV_H - 4),
+                        fill=BLACK, width=1)
+            ey += EV_H
+    else:
+        _text(draw, (right_x0 + 8, mid_y0 + 30), "None", F_TINY)
+
+    # Page indicator bottom-right (only if more than 1 page)
+    if total_pages > 1:
+        pg_str = f"{earn_page + 1} of {total_pages}"
+        _text(draw, (right_x1 - 8, mid_y1 - 8), pg_str, F_TINY, anchor="rb")
 
     # ── Center chart ──────────────────────────────────────────────────────────
     chart_pad_l, chart_pad_r = 44, 10
