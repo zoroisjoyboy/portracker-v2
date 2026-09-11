@@ -126,25 +126,39 @@ def fetch_index_extended(etf_ticker: str, price: float) -> tuple[float | None, f
 
 
 def fetch_dividends_yf(tickers: list[str]) -> list[dict]:
-    """
-    Fetch upcoming dividend events via yfinance.
-    Called once daily — not on every 5-min refresh.
-    """
     events  = []
     today   = date.today()
+    import calendar
+    last_day  = calendar.monthrange(today.year, today.month)[1]
+    month_end = date(today.year, today.month, last_day)
 
     for sym in tickers:
         try:
-            info     = yf.Ticker(sym).info
-            div_date = info.get("dividendDate")
-            div_rate = info.get("dividendRate")
-            if div_date and div_rate:
-                d = date.fromtimestamp(div_date)
-                if d >= today:
+            info          = yf.Ticker(sym).info
+            ex_date_ts    = info.get("exDividendDate")   # ex-dividend date
+            pay_date_ts   = info.get("dividendDate")      # payment date
+            div_rate      = info.get("dividendRate")
+            div_frequency = info.get("dividendFrequency") or 4
+            per_payment   = round(float(div_rate) / div_frequency, 4) if div_rate else None
+
+            if ex_date_ts:
+                ex_date = date.fromtimestamp(ex_date_ts)
+                if today <= ex_date <= month_end:
                     events.append({
-                        "symbol": sym, "kind": "DIV",
-                        "date":   d,
-                        "detail": f"${float(div_rate):.2f}",
+                        "symbol": sym,
+                        "kind":   "EX-DIV",
+                        "date":   ex_date,
+                        "detail": f"${per_payment:.2f}" if per_payment else "--",
+                    })
+
+            if pay_date_ts and per_payment:
+                pay_date = date.fromtimestamp(pay_date_ts)
+                if today <= pay_date <= month_end:
+                    events.append({
+                        "symbol": sym,
+                        "kind":   "DIV",
+                        "date":   pay_date,
+                        "detail": f"${per_payment:.2f}",
                     })
         except Exception:
             pass
@@ -361,11 +375,8 @@ def get_indices(display_mode: str) -> list[dict]:
     return result
 
 
-def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
-    """
-    Returns upcoming earnings (Finnhub) + dividends (yfinance, cached daily).
-    For dividends, reads from a simple in-memory cache keyed by date.
-    """
+def get_upcoming_events(db: Session, slugs: list[str]) -> dict[str, list]:
+    """Returns {"earn": [...], "div": [...], "exdiv": [...]}"""
     tickers: set[str] = set()
     for slug in slugs:
         acct = db.query(Account).filter_by(slug=slug, is_active=True).first()
@@ -375,12 +386,25 @@ def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
             if h.security.ticker_symbol and not h.security.is_cash_equivalent:
                 tickers.add(h.security.ticker_symbol)
 
-    events = []
+    import calendar
+    today     = date.today()
+    last_day  = calendar.monthrange(today.year, today.month)[1]
+    month_end = date(today.year, today.month, last_day)
+
+    earn_events = []
     for sym in tickers:
-        events.extend(fetch_earnings(sym))
+        for e in fetch_earnings(sym):
+            if today <= e["date"] <= month_end:
+                earn_events.append(e)
 
-    # Dividends from yfinance (lightweight — one call per ticker, cached by caller)
-    events.extend(fetch_dividends_yf(list(tickers)))
+    div_events = fetch_dividends_yf(list(tickers))
 
-    events.sort(key=lambda e: e["date"])
-    return events[:8]
+    earn_events.sort(key=lambda e: e["date"])
+    div_pay    = sorted([e for e in div_events if e["kind"] == "DIV"],    key=lambda e: e["date"])
+    ex_div     = sorted([e for e in div_events if e["kind"] == "EX-DIV"], key=lambda e: e["date"])
+
+    return {
+        "earn":  earn_events[:8],
+        "div":   div_pay[:8],
+        "exdiv": ex_div[:8],
+    }

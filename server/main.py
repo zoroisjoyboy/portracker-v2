@@ -178,9 +178,9 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
 def _render_mode(mode: str, db: Session) -> bytes:
     slugs      = PORTFOLIOS
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
-    indices    = get_indices(mode)
+    indices    = get_indices(db)
     history    = load_history(db, mode)
-    events     = get_upcoming_events(db, slugs)
+    events     = get_upcoming_events(db, slugs)  # now a dict
 
     img = render_display(portfolios, indices, history, events, mode)
     buf = io.BytesIO()
