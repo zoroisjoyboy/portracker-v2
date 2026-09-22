@@ -161,11 +161,13 @@ def manual_sync(db: Session = Depends(get_db_dep)):
 def manual_price_refresh(db: Session = Depends(get_db_dep)):
     """Manually trigger yfinance price refresh."""
     result = refresh_prices(db)
+    db.commit()
 
     slugs     = PORTFOLIOS
     pf_values = {slug: get_portfolio_value(db, slug) for slug in slugs}
     log_all_snapshots(db, pf_values)
-
+    db.commit()
+    
     return {"prices": result, "portfolios": {
         slug: {"total_value": pf["total_value"], "daily_pct": pf["daily_pct"]}
         for slug, pf in pf_values.items()
