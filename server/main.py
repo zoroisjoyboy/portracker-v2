@@ -13,6 +13,7 @@ Routes:
     GET  /display/image/monthly — force monthly mode
     GET  /display/image/ytd     — force ytd mode
     POST /admin/import-csv      — one-time CSV import
+    POST /admin/backfill        — backfill portfolio_history from Jan 1 to yesterday
 """
 
 import io
@@ -29,11 +30,63 @@ import plaid_client as pc
 from db import get_db_dep, init_db
 from models import PlaidItem, Account
 from sync import sync_all, sync_item
-from prices import refresh_prices, get_portfolio_value, get_indices, get_upcoming_events
+from prices import refresh_prices, get_portfolio_value, get_indices, get_upcoming_events, refresh_dividends
 from history import log_all_snapshots, load_history, import_from_csv
 from renderer import render_display
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = FastAPI(title="Portracker v2")
+scheduler = BackgroundScheduler()
+
+def scheduled_price_refresh():
+    from db import SessionLocal
+    db = SessionLocal()
+    try:
+        result = refresh_prices(db)
+        slugs     = PORTFOLIOS
+        pf_values = {slug: get_portfolio_value(db, slug) for slug in slugs}
+        log_all_snapshots(db, pf_values)
+        db.commit()
+        print(f"[CRON] Price refresh: {result['updated']} tickers updated")
+    except Exception as e:
+        print(f"[CRON] Price refresh failed: {e}")
+    finally:
+        db.close()
+
+def scheduled_dividend_refresh():
+    from db import SessionLocal
+    db = SessionLocal()
+    try:
+        events = refresh_dividends(db)
+        print(f"[CRON] Dividend refresh: {len(events)} events")
+    except Exception as e:
+        print(f"[CRON] Dividend refresh failed: {e}")
+    finally:
+        db.close()
+
+def scheduled_plaid_sync():
+    from db import SessionLocal
+    db = SessionLocal()
+    try:
+        results = sync_all(db)
+        db.commit()
+        print(f"[CRON] Plaid sync: {results}")
+    except Exception as e:
+        print(f"[CRON] Plaid sync failed: {e}")
+    finally:
+        db.close()
+
+# Price refresh every 5 min Mon-Fri 8:30am-3pm CT (14:30-21:00 UTC)
+scheduler.add_job(scheduled_price_refresh, "cron",
+                  day_of_week="mon-fri", hour="8-15", minute="*/5", timezone="America/Chicago")
+
+# Dividend refresh once daily at 7am CT (1pm UTC)
+scheduler.add_job(scheduled_dividend_refresh, "cron",
+                  day_of_week="mon-fri", hour=7, minute=0, timezone="America/Chicago")
+
+# Plaid sync 3x daily at market open, midday, 2pm CT (14, 18, 20 UTC)
+scheduler.add_job(scheduled_plaid_sync, "cron",
+                  day_of_week="mon-fri", hour="8,12,15", minute=0, timezone="America/Chicago")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,6 +105,12 @@ PORTFOLIOS = [
 @app.on_event("startup")
 def startup():
     init_db()
+    scheduler.start()
+    print("[SCHEDULER] Started")
+
+@app.on_event("shutdown")
+def shutdown():
+    scheduler.shutdown()
 
 
 # ── Plaid Link flow ───────────────────────────────────────────────────────────
@@ -167,7 +226,7 @@ def manual_price_refresh(db: Session = Depends(get_db_dep)):
     pf_values = {slug: get_portfolio_value(db, slug) for slug in slugs}
     log_all_snapshots(db, pf_values)
     db.commit()
-    
+
     return {"prices": result, "portfolios": {
         slug: {"total_value": pf["total_value"], "daily_pct": pf["daily_pct"]}
         for slug, pf in pf_values.items()
