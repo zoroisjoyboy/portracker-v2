@@ -375,7 +375,7 @@ def get_indices(display_mode: str) -> list[dict]:
     return result
 
 
-def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
+def get_upcoming_events(db: Session, slugs: list[str]) -> dict[str, list[dict]]:
     """
     Returns upcoming earnings (Finnhub) + dividends (yfinance, cached daily).
     For dividends, reads from a simple in-memory cache keyed by date.
@@ -389,12 +389,16 @@ def get_upcoming_events(db: Session, slugs: list[str]) -> list[dict]:
             if h.security.ticker_symbol and not h.security.is_cash_equivalent:
                 tickers.add(h.security.ticker_symbol)
 
-    events = []
+    events = {"earn": [], "exdiv": [], "div": []}
     for sym in tickers:
-        events.extend(fetch_earnings(sym))
+        for event in fetch_earnings(sym):
+            events["earn"].append(event)
 
     # Dividends from yfinance (lightweight — one call per ticker, cached by caller)
-    events.extend(fetch_dividends_yf(list(tickers)))
+    for event in fetch_dividends_yf(list(tickers)):
+        bucket = "exdiv" if event["kind"] == "EX-DIV" else "div"
+        events[bucket].append(event)
 
-    events.sort(key=lambda e: e["date"])
-    return events[:8]
+    for bucket in events.values():
+        bucket.sort(key=lambda e: e["date"])
+    return events
