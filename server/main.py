@@ -270,6 +270,37 @@ def display_image_mode(mode: str, db: Session = Depends(get_db_dep)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── iPhone Widget ──────────────────────────────────────────────────────────────────────
+@app.get("/widget/data")
+def widget_data(db: Session = Depends(get_db_dep)):
+    """
+    Lightweight JSON endpoint for Scriptable widget.
+    Returns current portfolio values, indices, and upcoming events.
+    """
+    slugs      = PORTFOLIOS
+    portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
+    indices    = get_indices(db)
+    events     = get_upcoming_events(db, slugs)
+    updated    = datetime.now().strftime("%b %-d  %-I:%M %p")
+
+    return {
+        "updated":    updated,
+        "portfolios": {
+            slug: {
+                "total_value": pf["total_value"],
+                "daily_pct":   pf["daily_pct"],
+                "daily_gain":  pf["daily_gain"],
+            }
+            for slug, pf in portfolios.items()
+        },
+        "indices": indices,
+        "events": {
+            "earn":  events.get("earn", []),
+            "div":   events.get("div", []),
+            "exdiv": events.get("exdiv", []),
+        },
+    }
+
 # ── Admin ──────────────────────────────────────────────────────────────────────
 
 class CsvImportRequest(BaseModel):
