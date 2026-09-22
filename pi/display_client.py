@@ -34,7 +34,7 @@ def fetch_image() -> Image.Image:
 def push_to_display(img: Image.Image):
     try:
         sys.path.insert(0, "/home/asaakov/portracker/lib")
-        from waveshare_epd import epd4in26
+        from waveshare_epd import epd4in26 # import the Waveshare e-paper display driver on the Pi/Arduino
         epd = epd4in26.EPD()
         epd.init()
         epd.display(epd.getbuffer(img))
