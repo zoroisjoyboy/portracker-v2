@@ -48,8 +48,6 @@ def log_all_snapshots(db: Session, portfolio_values: dict[str, dict]):
     """
     ts = datetime.utcnow()
     for slug, pf in portfolio_values.items():
-        if slug not in PORTFOLIOS:
-            continue
         if pf.get("daily_pct") is None or pf.get("total_value") is None:
             continue
         log_snapshot(db, slug, pf["daily_pct"], pf["total_value"], snapshot_at=ts)
