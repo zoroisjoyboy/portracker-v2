@@ -19,6 +19,7 @@ Routes:
 import io
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -78,7 +79,7 @@ def scheduled_plaid_sync():
 
 # Price refresh every 5 min Mon-Fri 8:30am-3pm CT (14:30-21:00 UTC)
 scheduler.add_job(scheduled_price_refresh, "cron",
-                  day_of_week="mon-fri", hour="8-15", minute="*/5", timezone="America/Chicago")
+                  day_of_week="mon-fri", hour="8-14", minute="*/5", timezone="America/Chicago")
 
 # Dividend refresh once daily at 7am CT (1pm UTC)
 scheduler.add_job(scheduled_dividend_refresh, "cron",
@@ -86,7 +87,7 @@ scheduler.add_job(scheduled_dividend_refresh, "cron",
 
 # Plaid sync 3x daily at market open, midday, 2pm CT (14, 18, 20 UTC)
 scheduler.add_job(scheduled_plaid_sync, "cron",
-                  day_of_week="mon-fri", hour="8,12,15", minute=0, timezone="America/Chicago")
+                  day_of_week="mon-fri", hour="8,12,14", minute=0, timezone="America/Chicago")
 
 app.add_middleware(
     CORSMiddleware,
@@ -281,7 +282,7 @@ def widget_data(db: Session = Depends(get_db_dep)):
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
     indices    = get_indices(db)
     events     = get_upcoming_events(db, slugs)
-    updated    = datetime.now().strftime("%b %-d  %-I:%M %p")
+    updated    = datetime.now(ZoneInfo("America/Chicago")).strftime("%b %-d  %-I:%M %p")
 
     return {
         "updated":    updated,
