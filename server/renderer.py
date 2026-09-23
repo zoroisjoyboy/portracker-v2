@@ -10,6 +10,7 @@ import math, os, subprocess, shutil
 from datetime import datetime, date, timedelta
 import holidays
 from zoneinfo import ZoneInfo
+import pytz
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -404,9 +405,14 @@ def render_display(portfolios: dict, indices: list, history: dict,
         t_min  = min(all_times)
         if mode == "daily":
             # Force x-axis to span full trading day (8:30am–3:00pm CT)
-            now = datetime.now(ZoneInfo("America/Chicago"))
+            ct  = pytz.timezone("America/Chicago")
+            now = datetime.now(ct)
             t_min  = now.replace(hour=8, minute=30, second=0, microsecond=0)
             t_max  = now.replace(hour=15, minute=0,  second=0, microsecond=0)
+
+            # Convert to naive UTC to match DB timestamps
+            t_min = t_min.astimezone(pytz.utc).replace(tzinfo=None)
+            t_max = t_max.astimezone(pytz.utc).replace(tzinfo=None)
         else:
             t_max = max(all_times)
         t_span = (t_max - t_min).total_seconds() or 1.0

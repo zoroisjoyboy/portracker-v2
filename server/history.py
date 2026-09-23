@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import os
 from models import PortfolioHistory, Account
-
+import pytz
 
 PORTFOLIOS = [
     slug.strip()
@@ -60,18 +60,21 @@ def load_history(db: Session, mode: str) -> dict[str, list[tuple[datetime, float
 
     mode: daily | monthly | ytd
     """
-    now = datetime.utcnow()
+    ct = pytz.timezone("America/Chicago")
+    now = datetime.now(ct)
 
     if mode == "daily":
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif mode == "monthly":
         cutoff = now - timedelta(days=30)
     else:  # ytd
-        cutoff = datetime(now.year, 1, 1)
+        cutoff = datetime(now.year, 1, 1, tzinfo=ct)
+
+    cutoff_utc = cutoff.astimezone(pytz.utc).replace(tzinfo=None)
 
     rows = (
         db.query(PortfolioHistory)
-        .filter(PortfolioHistory.snapshot_at >= cutoff)
+        .filter(PortfolioHistory.snapshot_at >= cutoff_utc)
         .filter(PortfolioHistory.slug.in_(PORTFOLIOS))
         .order_by(PortfolioHistory.snapshot_at)
         .all()
