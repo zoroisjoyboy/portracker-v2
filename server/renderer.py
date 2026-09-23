@@ -404,7 +404,7 @@ def render_display(portfolios: dict, indices: list, history: dict,
         t_min  = min(all_times)
         if mode == "daily":
             # Force x-axis to span full trading day (8:30am–3:00pm CT)
-            now = datetime.now()
+            now = datetime.now(ZoneInfo("America/Chicago"))
             t_min  = now.replace(hour=8, minute=30, second=0, microsecond=0)
             t_max  = now.replace(hour=15, minute=0,  second=0, microsecond=0)
         else:
