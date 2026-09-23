@@ -12,6 +12,7 @@ Routes:
     GET  /display/image/daily   — force daily mode
     GET  /display/image/monthly — force monthly mode
     GET  /display/image/ytd     — force ytd mode
+    GET  /widget/data           — returns JSON for iPhone widget
     POST /admin/import-csv      — one-time CSV import
     POST /admin/backfill        — backfill portfolio_history from Jan 1 to yesterday
 """
@@ -274,18 +275,44 @@ def display_image_mode(mode: str, db: Session = Depends(get_db_dep)):
 # ── iPhone Widget ──────────────────────────────────────────────────────────────────────
 @app.get("/widget/data")
 def widget_data(db: Session = Depends(get_db_dep)):
-    """
-    Lightweight JSON endpoint for Scriptable widget.
-    Returns current portfolio values, indices, and upcoming events.
-    """
+    from datetime import datetime, timedelta
+    import pytz
+
+    ct       = pytz.timezone("America/Chicago")
+    now_ct   = datetime.now(ct)
+    # Week bounds: Mon 00:00 – Sun 23:59 CT
+    day      = now_ct.weekday()  # 0=Mon
+    mon      = (now_ct - timedelta(days=day)).replace(hour=0, minute=0, second=0, microsecond=0)
+    sun      = mon + timedelta(days=6, hours=23, minutes=59, seconds=59)
+
     slugs      = PORTFOLIOS
     portfolios = {slug: get_portfolio_value(db, slug) for slug in slugs}
     indices    = get_indices(db)
-    events     = get_upcoming_events(db, slugs)
-    updated    = datetime.now(ZoneInfo("America/Chicago")).strftime("%b %-d  %-I:%M %p")
+    all_events = get_upcoming_events(db, slugs)
+
+    # Filter events to this week only
+    def this_week(e):
+        d = e["date"]
+        ct_date = mon.date()
+        return mon.date() <= d <= sun.date()
+
+    earn_week  = [e for e in all_events.get("earn",  []) if this_week(e)]
+    div_week   = [e for e in all_events.get("div",   []) if this_week(e)]
+    exdiv_week = [e for e in all_events.get("exdiv", []) if this_week(e)]
+
+    def fmt_event(e):
+        return {
+            "symbol": e["symbol"],
+            "date":   e["date"].strftime("%b %-d"),
+            "detail": e["detail"],
+        }
 
     return {
-        "updated":    updated,
+        "updated": now_ct.strftime("%b %-d  %-I:%M %p"),
+        "market_open": (
+            now_ct.weekday() < 5
+            and now_ct.replace(hour=8, minute=30) <= now_ct <= now_ct.replace(hour=15, minute=0)
+        ),
         "portfolios": {
             slug: {
                 "total_value": pf["total_value"],
@@ -293,12 +320,13 @@ def widget_data(db: Session = Depends(get_db_dep)):
                 "daily_gain":  pf["daily_gain"],
             }
             for slug, pf in portfolios.items()
+            if pf["total_value"] is not None
         },
         "indices": indices,
         "events": {
-            "earn":  events.get("earn", []),
-            "div":   events.get("div", []),
-            "exdiv": events.get("exdiv", []),
+            "earn":  [fmt_event(e) for e in earn_week],
+            "div":   [fmt_event(e) for e in div_week],
+            "exdiv": [fmt_event(e) for e in exdiv_week],
         },
     }
 
