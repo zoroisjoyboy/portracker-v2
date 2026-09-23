@@ -19,7 +19,7 @@ Routes:
 
 import io
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Query
@@ -103,6 +103,20 @@ PORTFOLIOS = [
     for slug in os.getenv("PORTFOLIOS", "").split(",")
     if slug.strip()
 ]
+
+# Cache for upcoming events for widget, no need to call every time GET widget/data is called
+_events_cache: dict = {}
+_events_cache_time: datetime | None = None
+EVENTS_CACHE_TTL = timedelta(hours=1)
+
+def get_cached_events(db, slugs):
+    global _events_cache, _events_cache_time
+    now = datetime.utcnow()
+    if _events_cache_time and (now - _events_cache_time) < EVENTS_CACHE_TTL:
+        return _events_cache
+    _events_cache      = get_upcoming_events(db, slugs)
+    _events_cache_time = now
+    return _events_cache
 
 @app.on_event("startup")
 def startup():
