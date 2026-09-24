@@ -382,8 +382,9 @@ def render_display(portfolios: dict, indices: list, history: dict,
         if not pts:
             continue
         if mode == "daily":
-            base = pts[0][1] # pct_gain at day open
-            normalized = [(ts, pct - base) for ts, pct, _ in pts]
+            base_dollar = pts[0][2]  # yesterday's close dollar_value
+            normalized  = [(ts, ((dv - base_dollar) / base_dollar) * 100)
+                        for ts, _, dv in pts]
         else:
             base_dv = pts[0][2] # dollar_value at window start
             if not base_dv:
