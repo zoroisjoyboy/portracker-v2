@@ -52,22 +52,15 @@ def log_all_snapshots(db: Session, portfolio_values: dict[str, dict]):
             continue
         log_snapshot(db, slug, pf["daily_pct"], pf["total_value"], snapshot_at=ts)
 
-
 def load_history(db: Session, mode: str) -> dict[str, list[tuple[datetime, float, float]]]:
-    """
-    Returns {slug: [(datetime, pct_gain, dollar_value), ...]}
-    filtered to the relevant window and downsampled for monthly/YTD.
-
-    mode: daily | monthly | ytd
-    """
-    ct = pytz.timezone("America/Chicago")
+    ct  = pytz.timezone("America/Chicago")
     now = datetime.now(ct)
 
     if mode == "daily":
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif mode == "monthly":
         cutoff = now - timedelta(days=30)
-    else:  # ytd
+    else:
         cutoff = datetime(now.year, 1, 1, tzinfo=ct)
 
     cutoff_utc = cutoff.astimezone(pytz.utc).replace(tzinfo=None)
@@ -94,8 +87,21 @@ def load_history(db: Session, mode: str) -> dict[str, list[tuple[datetime, float
                 by_day[ts.date()] = (ts, pct, dv)
             series[slug] = [by_day[d] for d in sorted(by_day)]
 
-    return series
+    # Daily: fetch yesterday's closing value per slug as baseline
+    if mode == "daily":
+        for slug in list(series.keys()):
+            prev = (
+                db.query(PortfolioHistory)
+                .filter(PortfolioHistory.snapshot_at < cutoff_utc)
+                .filter(PortfolioHistory.slug == slug)
+                .order_by(PortfolioHistory.snapshot_at.desc())
+                .first()
+            )
+            if prev:
+                # Prepend yesterday's close as t=0 anchor
+                series[slug].insert(0, (cutoff_utc, 0.0, prev.dollar_value))
 
+    return series
 
 def import_from_csv(db: Session, csv_path: str) -> int:
     """
